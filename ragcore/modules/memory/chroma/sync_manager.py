@@ -5,6 +5,7 @@ from typing import List, Optional, Dict, Any
 from uuid import UUID
 from datetime import datetime, timedelta
 import asyncio
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +74,14 @@ class ChromaMemorySyncManager:
             success = result["success_count"] > 0
 
         if not success:
-            # Queue for retry with exponential backoff
+            # Queue for retry with exponential backoff + jitter
             retry_count = self.retry_count.get(memory_id, 0)
             if retry_count < self.max_retries:
-                backoff_seconds = 2 ** retry_count  # 1, 2, 4, 8, 16 seconds
+                base_backoff_seconds = 2 ** retry_count  # 1, 2, 4, 8, 16 seconds
+                # Add ±10% jitter to prevent thundering herd
+                jitter = random.uniform(0.9, 1.1)
+                backoff_seconds = base_backoff_seconds * jitter
+
                 self.sync_queue[memory_id] = datetime.utcnow() + timedelta(
                     seconds=backoff_seconds
                 )
@@ -85,7 +90,7 @@ class ChromaMemorySyncManager:
                 logger.warning(
                     f"Sync failed for {memory_id}, queued for retry "
                     f"(attempt {retry_count + 1}/{self.max_retries}, "
-                    f"backoff={backoff_seconds}s)"
+                    f"backoff={backoff_seconds:.1f}s)"
                 )
             else:
                 logger.error(

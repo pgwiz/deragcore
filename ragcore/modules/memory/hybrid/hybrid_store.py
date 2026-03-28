@@ -55,6 +55,7 @@ class HybridMemoryStore(LongTermMemoryStore):
 
         self.embedding_provider = embedding_provider
         self.embedding_model = embedding_model
+        self.embedding_dimension = 1536  # Standard embedding dimension for OpenAI embeddings
 
         logger.info(
             f"HybridMemoryStore initialized: "
@@ -63,7 +64,7 @@ class HybridMemoryStore(LongTermMemoryStore):
         )
 
     async def _get_embedding(self, text: str) -> Optional[List[float]]:
-        """Get embedding for text via AIController.
+        """Get embedding for text using EmbeddingProviderAdapter.
 
         Args:
             text: Text to embed
@@ -72,11 +73,36 @@ class HybridMemoryStore(LongTermMemoryStore):
             1536-dimensional embedding vector or None
         """
         try:
-            # Use AIController to get embeddings
-            # In production, would use a dedicated embedding endpoint
-            # For now, placeholder that returns None (ChromaDB will handle missing embeddings)
-            logger.debug(f"Getting embedding for text: {text[:50]}...")
-            return None  # Placeholder
+            if not text or not text.strip():
+                return None
+
+            # Use EmbeddingProviderAdapter for real embedding generation
+            from ragcore.modules.multimodal.providers.embedding_adapter import EmbeddingProviderAdapter
+            from ragcore.core.model_provider_registry import ModelProviderRegistry
+
+            # Get or create registry and adapter
+            registry = ModelProviderRegistry()
+            adapter = EmbeddingProviderAdapter(
+                registry=registry,
+                embedding_dimension=self.embedding_dimension,
+                model_id=self.embedding_model,
+            )
+
+            # Generate embedding
+            embedding = await adapter.embed_text(text)
+
+            # Validate dimension
+            if embedding and len(embedding) == self.embedding_dimension:
+                logger.debug(f"Generated {self.embedding_dimension}-dim embedding for text: {text[:50]}...")
+                return embedding
+
+            if embedding:
+                logger.warning(
+                    f"Embedding dimension mismatch: got {len(embedding) if embedding else 0}, "
+                    f"expected {self.embedding_dimension}"
+                )
+
+            return None
 
         except Exception as e:
             logger.error(f"Error getting embedding: {e}")

@@ -16,6 +16,7 @@ from ragcore.modules.multimodal.models import (
     ProcessingResult,
 )
 from ragcore.modules.multimodal.storage import get_storage_backend_from_config
+from ragcore.modules.multimodal.chroma_sync import get_multimodal_chroma_sync
 from ragcore.modules.multimodal.embedding_pipeline import MultiModalEmbeddingPipeline
 from ragcore.config import settings
 
@@ -195,9 +196,26 @@ async def upload_multimodal_content(
             "uploaded_by": str(api_key_id),
         }
 
-        # Note: In a real implementation, this would persist to database
-        # For now, we return the response that would be stored
-        logger.info(f"Created MultiModalContent record: {content_id} for session {session_id}")
+        # Note: In a real implementation, this would:
+        # 1. Process content with appropriate processor (image/audio/video)
+        # 2. Extract chunks and embed them
+        # 3. Sync chunks to ChromaDB for semantic search
+        #
+        # Example:
+        # processor = AudioProcessor() if modality == "audio" else ImageProcessor()
+        # processing_result = await processor.process(content)
+        #
+        # pipeline = MultiModalEmbeddingPipeline()
+        # processing_result = await pipeline.embed_processing_result(processing_result)
+        #
+        # chroma_sync = await get_multimodal_chroma_sync()
+        # sync_result = await chroma_sync.sync_processing_result(
+        #     session_id=session_id,
+        #     content_id=content_id,
+        #     processing_result=processing_result,
+        #     storage_path=storage_path
+        # )
+        # logger.info(f"ChromaDB sync: {sync_result['synced_count']} synced, {sync_result['failed_count']} failed")
 
         return {
             "id": str(content_id),
