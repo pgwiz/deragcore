@@ -106,6 +106,37 @@ class Settings(BaseSettings):
     webhook_retry_backoff_seconds: int = 5
     webhook_timeout_seconds: int = 10
 
+    # ========== PHASE 5: ChromaDB Integration ==========
+    # ChromaDB Deployment
+    chroma_enabled: bool = True
+    chroma_deployment_mode: str = "hybrid"  # hybrid, chroma_primary, postgres_only
+
+    # ChromaDB Connection
+    chroma_host: str = "localhost"
+    chroma_port: int = 8000
+    chroma_api_key: Optional[str] = None
+
+    # ChromaDB Persistence
+    chroma_persistence_mode: str = "persistent"  # persistent, ephemeral
+    chroma_persistence_path: str = "/data/chroma"
+    chroma_db_impl: str = "duckdb"  # duckdb, duckdb+parquet
+
+    # ChromaDB Performance Tuning
+    chroma_collection_retention_days: int = 365
+    chroma_auto_compact_threshold: int = 10000
+    chroma_batch_sync_window_ms: int = 100
+    chroma_sync_retry_max_attempts: int = 3
+
+    # ChromaDB High Availability
+    chroma_connection_pool_size: int = 10
+    chroma_connection_timeout_seconds: int = 5
+    chroma_circuit_breaker_threshold: int = 5
+    chroma_circuit_breaker_reset_minutes: int = 10
+
+    # ChromaDB Memory Management
+    chroma_embedding_cache_size: int = 1000
+    chroma_max_batch_size: int = 100
+
     class Config:
         env_file = ".env"
         case_sensitive = False
