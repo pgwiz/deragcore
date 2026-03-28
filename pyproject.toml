@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ragcore"
+version = "0.1.0"
+description = "Modular multi-provider RAG API platform"
+requires-python = ">=3.11"
+authors = [{name = "RAGCORE", email = "dev@ragcore.local"}]
+
+dependencies = [
+    "fastapi>=0.109",
+    "uvicorn[standard]>=0.27",
+    "sqlalchemy[asyncio]>=2.0",
+    "psycopg[binary,asyncio]>=3.1",
+    "pgvector>=0.3",
+    "redis[asyncio]>=5.0",
+    "pydantic-settings>=2.0",
+    "pydantic>=2.0",
+    "anthropic>=0.25",
+    "azure-ai-inference>=1.0",
+    "openai>=1.20",
+    "alembic>=1.13",
+    "python-dotenv>=1.0",
+    # Phase 2: File Processing
+    "pymupdf>=1.23.0",
+    "python-docx>=0.8.11",
+    "tiktoken>=0.5.0",
+    "langchain-text-splitters>=0.0.1",
+    # Phase 2: Background Jobs
+    "arq>=0.25.0",
+    # Phase 3: Research & Web Search
+    "tavily-python>=0.3.0",
+    "google-search-results>=2.4.8",
+    "duckduckgo-search>=3.9.0",
+    "gpt-researcher>=0.33.0",
+    # Phase 4: Production Hardening
+    "prometheus-client>=0.20.0",
+    "pyjwt>=2.8.0",
+    "httpx>=0.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1",
+    "black>=24.1",
+    "mypy>=1.8",
+    "ruff>=0.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourorg/ragcore"
+
+[tool.setuptools]
+packages = ["ragcore"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-v --tb=short"
