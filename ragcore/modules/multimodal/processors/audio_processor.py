@@ -13,6 +13,8 @@ from ragcore.modules.multimodal.models import (
     AudioFormat,
 )
 from ragcore.modules.multimodal.processors.base import BaseModalityProcessor
+from ragcore.modules.multimodal.chunking import AudioSilenceChunker, SpeakerDiarizationChunker
+from ragcore.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -228,28 +230,25 @@ class AudioProcessor(BaseModalityProcessor):
 
             transcription = response.get("text", "")
             confidence = response.get("confidence", 0.90)
+            timestamps = response.get("timestamps", None)  # Optional word-level timestamps
 
-            # Create chunk for transcription
-            chunk = MultiModalChunk(
-                id=uuid4(),
-                session_id=session_id,
-                modality=ModuleType.AUDIO,
-                content=transcription,
-                embedding=[],
-                metadata=content.metadata,
-                source_index=0,
-                confidence_score=confidence,
-                is_critical=False,
+            # Apply smart chunking if configured
+            chunks = await self._apply_audio_chunking(
+                transcription,
+                session_id,
+                content.metadata,
+                confidence,
+                timestamps,
             )
 
             return ProcessingResult(
                 success=True,
                 modality=ModuleType.AUDIO,
-                chunks=[chunk],
+                chunks=chunks,
                 extracted_text=transcription,
                 processing_time_ms=0,  # Set by caller
                 tokens_used=self.estimate_tokens_used(content),
-                confidence_scores=[confidence],
+                confidence_scores=[chunk.confidence_score for chunk in chunks],
             )
 
         except Exception as e:
@@ -455,3 +454,119 @@ class AudioProcessor(BaseModalityProcessor):
         return {
             "text": "[Whisper transcription]",
         }
+
+    async def _apply_audio_chunking(
+        self,
+        transcription: str,
+        session_id: UUID,
+        metadata,
+        base_confidence: float,
+        timestamps: Optional[list] = None,
+    ) -> list:
+        """Apply smart audio chunking based on configuration.
+
+        Args:
+            transcription: Full transcript
+            session_id: Session ID
+            metadata: Audio metadata
+            base_confidence: Base confidence score from transcription
+            timestamps: Optional word-level timestamps
+
+        Returns:
+            List of MultiModalChunk objects
+        """
+        chunking_strategy = settings.audio_chunking_strategy
+
+        try:
+            if chunking_strategy == "silence":
+                # Use silence detection
+                silence_chunker = AudioSilenceChunker(
+                    energy_percentile=settings.audio_silence_threshold,
+                    min_chunk_duration_s=settings.audio_min_chunk_duration_s,
+                    silence_duration_s=settings.audio_silence_duration_s,
+                )
+                chunk_data = await silence_chunker.chunk_by_silence(
+                    transcription,
+                    timestamps=timestamps,
+                )
+
+            elif chunking_strategy == "speaker" and settings.audio_enable_speaker_diarization:
+                # Use speaker diarization (requires audio file path and HF token)
+                speaker_chunker = SpeakerDiarizationChunker(
+                    huggingface_token=settings.audio_huggingface_token,
+                )
+                # Note: Would need audio file path from content - using fallback for now
+                self.logger.warning("Speaker diarization requires audio file path, using silence fallback")
+                silence_chunker = AudioSilenceChunker()
+                chunk_data = await silence_chunker.chunk_by_silence(transcription, timestamps=timestamps)
+
+            else:  # hybrid or default
+                # Use silence detection as base
+                silence_chunker = AudioSilenceChunker(
+                    energy_percentile=settings.audio_silence_threshold,
+                    min_chunk_duration_s=settings.audio_min_chunk_duration_s,
+                    silence_duration_s=settings.audio_silence_duration_s,
+                )
+                chunk_data = await silence_chunker.chunk_by_silence(
+                    transcription,
+                    timestamps=timestamps,
+                )
+
+            # Convert chunked data to MultiModalChunk objects
+            chunks = []
+            for source_idx, chunk_info in enumerate(chunk_data):
+                chunk = MultiModalChunk(
+                    id=uuid4(),
+                    session_id=session_id,
+                    modality=ModuleType.AUDIO,
+                    content=chunk_info.get("content", ""),
+                    embedding=[],
+                    metadata=metadata,
+                    source_index=source_idx,
+                    confidence_score=chunk_info.get("confidence", base_confidence),
+                    is_critical=False,
+                )
+                # Store temporal metadata
+                if "start_sec" in chunk_info:
+                    chunk.metadata.temporal_start_sec = chunk_info["start_sec"]
+                if "end_sec" in chunk_info:
+                    chunk.metadata.temporal_end_sec = chunk_info["end_sec"]
+
+                chunks.append(chunk)
+
+            self.logger.info(f"Applied {chunking_strategy} chunking: {len(transcription.split())} words → {len(chunks)} chunks")
+            return chunks if chunks else [self._create_default_chunk(transcription, session_id, metadata, base_confidence)]
+
+        except Exception as e:
+            self.logger.warning(f"Audio chunking failed ({chunking_strategy}): {e}, using single chunk")
+            return [self._create_default_chunk(transcription, session_id, metadata, base_confidence)]
+
+    def _create_default_chunk(
+        self,
+        content: str,
+        session_id: UUID,
+        metadata,
+        confidence: float,
+    ) -> MultiModalChunk:
+        """Create a single default chunk (fallback).
+
+        Args:
+            content: Chunk content
+            session_id: Session ID
+            metadata: Metadata
+            confidence: Confidence score
+
+        Returns:
+            MultiModalChunk
+        """
+        return MultiModalChunk(
+            id=uuid4(),
+            session_id=session_id,
+            modality=ModuleType.AUDIO,
+            content=content,
+            embedding=[],
+            metadata=metadata,
+            source_index=0,
+            confidence_score=confidence,
+            is_critical=False,
+        )

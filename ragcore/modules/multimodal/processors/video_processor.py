@@ -13,6 +13,8 @@ from ragcore.modules.multimodal.models import (
     VideoFormat,
 )
 from ragcore.modules.multimodal.processors.base import BaseModalityProcessor
+from ragcore.modules.multimodal.chunking import VideoSceneChunker
+from ragcore.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -301,14 +303,14 @@ class VideoProcessor(BaseModalityProcessor):
         content: MultiModalContent,
         session_id: UUID,
     ) -> ProcessingResult:
-        """Extract audio narration from video.
+        """Extract audio narration from video with smart chunking.
 
         Args:
             content: Video content
             session_id: Session ID
 
         Returns:
-            ProcessingResult with audio transcription
+            ProcessingResult with audio transcription chunks
         """
         try:
             # Placeholder: would extract audio from video
@@ -331,28 +333,90 @@ class VideoProcessor(BaseModalityProcessor):
                     error_message="Audio transcription failed",
                 )
 
-            # Create single chunk for all narration
-            chunk = MultiModalChunk(
-                id=uuid4(),
-                session_id=session_id,
-                modality=ModuleType.AUDIO,
-                content=transcription.get("text", ""),
-                embedding=[],
-                metadata=content.metadata,
-                source_index=0,
-                confidence_score=transcription.get("confidence", 0.80),
-                is_critical=True,  # Narration is usually critical
-            )
+            narration_text = transcription.get("text", "")
+            base_confidence = transcription.get("confidence", 0.80)
 
-            return ProcessingResult(
-                success=True,
-                modality=ModuleType.VIDEO,
-                chunks=[chunk],
-                extracted_text=transcription.get("text", ""),
-                processing_time_ms=0,  # Set by caller
-                tokens_used=max(100, int((content.metadata.duration_seconds or 60) * 150 / 60 / 4)),
-                confidence_scores=[chunk.confidence_score],
-            )
+            # Apply smart audio chunking to narration
+            try:
+                from ragcore.modules.multimodal.chunking import AudioSilenceChunker
+
+                silence_chunker = AudioSilenceChunker(
+                    energy_percentile=settings.audio_silence_threshold,
+                    min_chunk_duration_s=settings.audio_min_chunk_duration_s,
+                )
+                chunk_data = await silence_chunker.chunk_by_silence(narration_text)
+
+                chunks: List[MultiModalChunk] = []
+                confidence_scores = []
+                full_text = ""
+
+                for idx, chunk_info in enumerate(chunk_data):
+                    chunk = MultiModalChunk(
+                        id=uuid4(),
+                        session_id=session_id,
+                        modality=ModuleType.AUDIO,
+                        content=chunk_info.get("content", ""),
+                        embedding=[],
+                        metadata=content.metadata,
+                        source_index=idx,
+                        confidence_score=chunk_info.get("confidence", base_confidence),
+                        is_critical=idx == 0,  # First narration chunk is critical
+                    )
+                    chunks.append(chunk)
+                    confidence_scores.append(chunk.confidence_score)
+                    full_text += f"\n[Narration {idx}]: {chunk_info.get('content', '')}"
+
+                if not chunks:
+                    # Fallback to single chunk
+                    chunk = MultiModalChunk(
+                        id=uuid4(),
+                        session_id=session_id,
+                        modality=ModuleType.AUDIO,
+                        content=narration_text,
+                        embedding=[],
+                        metadata=content.metadata,
+                        source_index=0,
+                        confidence_score=base_confidence,
+                        is_critical=True,
+                    )
+                    chunks = [chunk]
+                    confidence_scores = [base_confidence]
+                    full_text = narration_text
+
+                return ProcessingResult(
+                    success=True,
+                    modality=ModuleType.VIDEO,
+                    chunks=chunks,
+                    extracted_text=full_text,
+                    processing_time_ms=0,  # Set by caller
+                    tokens_used=max(100, int((content.metadata.duration_seconds or 60) * 150 / 60 / 4)),
+                    confidence_scores=confidence_scores,
+                )
+
+            except Exception as e:
+                self.logger.warning(f"Audio chunking failed: {e}, using single narration chunk")
+                # Fallback to single chunk
+                chunk = MultiModalChunk(
+                    id=uuid4(),
+                    session_id=session_id,
+                    modality=ModuleType.AUDIO,
+                    content=narration_text,
+                    embedding=[],
+                    metadata=content.metadata,
+                    source_index=0,
+                    confidence_score=base_confidence,
+                    is_critical=True,
+                )
+
+                return ProcessingResult(
+                    success=True,
+                    modality=ModuleType.VIDEO,
+                    chunks=[chunk],
+                    extracted_text=narration_text,
+                    processing_time_ms=0,  # Set by caller
+                    tokens_used=max(100, int((content.metadata.duration_seconds or 60) * 150 / 60 / 4)),
+                    confidence_scores=[base_confidence],
+                )
 
         except Exception as e:
             self.logger.error(f"Narration extraction failed: {e}")

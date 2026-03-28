@@ -164,6 +164,22 @@ class Settings(BaseSettings):
     video_extract_narration: bool = True
     video_extract_frames: bool = True
 
+    # ========== PHASE 0 Task 5: Smart Chunking ==========
+    # Audio Chunking
+    audio_chunking_strategy: str = "silence"  # silence, speaker, hybrid
+    audio_silence_threshold: int = 20  # Percentile for silence detection (0-100)
+    audio_min_chunk_duration_s: float = 2.0
+    audio_silence_duration_s: float = 0.5
+    audio_enable_speaker_diarization: bool = False  # Requires pyannote + HF token
+    audio_huggingface_token: Optional[str] = None
+
+    # Video Chunking
+    video_chunking_strategy: str = "content"  # content, histogram, manual, duration
+    video_scene_detection_threshold: float = 27.0  # Higher = fewer scenes
+    video_min_scene_length_s: float = 1.0
+    video_keyframes_per_scene: int = 2  # 1-3 keyframes
+    video_chunk_fallback_duration_s: float = 10.0
+
     # Multi-Modal Storage
     multimodal_storage_backend: str = "local"  # local, s3, azure_blob
     multimodal_storage_path: str = "/data/multimodal"
