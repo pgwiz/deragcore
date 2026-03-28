@@ -6,6 +6,7 @@ from datetime import datetime
 
 from ragcore.core.token_counter import TokenCounter
 from ragcore.core.token_budget import TokenBudget
+from ragcore.core.model_registry import ModelRegistry
 from ragcore.modules.memory.context_prioritizer import ContextPrioritizer
 from ragcore.modules.memory.memory_compressor import MemoryCompressor, CompressedTurn
 from ragcore.modules.chat.retriever import RetrievedChunk
@@ -24,24 +25,52 @@ class ContextWindowManager:
     - Prioritize chunks and history via ContextPrioritizer
     - Compress old content via MemoryCompressor
     - Build optimized message list within budget
+    - Support multiple AI providers and models
     """
 
     def __init__(
         self,
-        context_window_size: int = 200000,
+        provider: Optional[str] = None,
+        model_id: Optional[str] = None,
+        context_window_size: Optional[int] = None,
         output_buffer_percentage: float = 0.15,
         compression_threshold: float = 0.85,
     ):
         """Initialize context window manager.
 
         Args:
-            context_window_size: Total context window in tokens (default: 200000 for Claude)
+            provider: AI provider ('anthropic', 'openai', 'azure', 'ollama')
+                      If provided with model_id, automatically determines context window
+            model_id: Model identifier ('gpt-4-turbo', 'claude-3-opus', etc)
+                      If provided with provider, automatically determines context window
+            context_window_size: Override context window in tokens (optional)
+                                 If None, looked up from registry via provider+model_id
             output_buffer_percentage: Fraction reserved for output (default: 0.15 = 15%)
             compression_threshold: Trigger compression at this usage fraction (default: 0.85 = 85%)
         """
+        # Determine context window
+        if context_window_size is not None:
+            # Explicitly provided
+            window = context_window_size
+            logger.info(f"ContextWindowManager: using explicit window={window}")
+        elif provider and model_id:
+            # Look up from registry
+            window = ModelRegistry.get_context_window(provider, model_id)
+            logger.info(f"ContextWindowManager: auto-detected {provider}/{model_id} window={window}")
+        else:
+            # Fallback default
+            window = 8000
+            logger.warning(
+                f"ContextWindowManager: no provider/model specified, using conservative default={window}"
+            )
+
+        self.provider = provider
+        self.model_id = model_id
+        self.context_window_size = window
+
         self.token_counter = TokenCounter()
         self.budget = TokenBudget(
-            context_window_size=context_window_size,
+            context_window_size=window,
             output_buffer_percentage=output_buffer_percentage,
             compression_threshold=compression_threshold,
         )
@@ -49,7 +78,8 @@ class ContextWindowManager:
 
         logger.info(
             f"ContextWindowManager initialized: "
-            f"window={context_window_size}, "
+            f"provider={provider}, model={model_id}, "
+            f"window={window}, "
             f"buffer={self.budget.buffer_tokens}, "
             f"compression_at={self.budget.compression_trigger_tokens}"
         )

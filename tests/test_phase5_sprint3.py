@@ -7,12 +7,59 @@ from uuid import uuid4
 
 from ragcore.core.token_counter import TokenCounter
 from ragcore.core.token_budget import TokenBudget
+from ragcore.core.model_registry import ModelRegistry
 from ragcore.modules.memory.context_prioritizer import ContextPrioritizer
 from ragcore.modules.memory.memory_compressor import MemoryCompressor, CompressedTurn
 from ragcore.core.context_window_manager import ContextWindowManager
 from ragcore.modules.chat.retriever import RetrievedChunk
 from ragcore.modules.chat.history import ChatTurn
 from ragcore.modules.chat.context_builder import ContextBuilder
+
+
+class TestModelRegistry:
+    """Test model context window registry."""
+
+    def test_get_context_window_claude(self):
+        """Test getting context window for Claude model."""
+        window = ModelRegistry.get_context_window("anthropic", "claude-3-opus-20250219")
+        assert window == 200000
+
+    def test_get_context_window_gpt4_turbo(self):
+        """Test getting context window for GPT-4 Turbo."""
+        window = ModelRegistry.get_context_window("openai", "gpt-4-turbo")
+        assert window == 128000
+
+    def test_get_context_window_case_insensitive(self):
+        """Test that lookup is case-insensitive."""
+        window1 = ModelRegistry.get_context_window("AnThropiC", "Claude-3-Opus-20250219")
+        window2 = ModelRegistry.get_context_window("anthropic", "claude-3-opus-20250219")
+        assert window1 == window2 == 200000
+
+    def test_get_context_window_unknown_model(self):
+        """Test fallback for unknown model."""
+        window = ModelRegistry.get_context_window("openai", "unknown-model-xyz", default=4000)
+        assert window == 4000
+
+    def test_get_context_window_gpt35(self):
+        """Test GPT-3.5 turbo window."""
+        window = ModelRegistry.get_context_window("openai", "gpt-3.5-turbo")
+        assert window == 16000
+
+    def test_get_context_window_llama(self):
+        """Test Llama model window."""
+        window = ModelRegistry.get_context_window("ollama", "llama3.1:70b")
+        assert window == 128000
+
+    def test_list_models(self):
+        """Test listing all known models."""
+        models = ModelRegistry.list_models()
+        assert "anthropic" in models
+        assert "openai" in models
+        assert "azure" in models
+        assert "ollama" in models
+        # Should have at least one model per provider
+        for provider, model_list in models.items():
+            assert len(model_list) > 0
 
 
 class TestTokenCounter:
@@ -236,6 +283,41 @@ class TestContextWindowManager:
         assert manager.budget is not None
         assert manager.budget.context_window_size == 200000
 
+    def test_init_with_model_detection(self):
+        """Test auto-detection of context window from model."""
+        manager = ContextWindowManager(provider="openai", model_id="gpt-4-turbo")
+        assert manager.context_window_size == 128000
+        assert manager.provider == "openai"
+        assert manager.model_id == "gpt-4-turbo"
+
+    def test_init_claude_model_detection(self):
+        """Test Claude model detection."""
+        manager = ContextWindowManager(provider="anthropic", model_id="claude-3-opus-20250219")
+        assert manager.context_window_size == 200000
+
+    def test_init_ollama_llama3_detection(self):
+        """Test Ollama Llama3.1 detection."""
+        manager = ContextWindowManager(provider="ollama", model_id="llama3.1:70b")
+        assert manager.context_window_size == 128000
+
+    def test_init_fallback_default(self):
+        """Test fallback to default when no provider/model."""
+        manager = ContextWindowManager()
+        # Should use conservative default
+        assert manager.context_window_size > 0
+        assert manager.provider is None
+        assert manager.model_id is None
+
+    def test_init_explicit_override_model(self):
+        """Test explicit context_window_size overrides model detection."""
+        manager = ContextWindowManager(
+            provider="openai",
+            model_id="gpt-4-turbo",
+            context_window_size=50000,
+        )
+        # Explicit should win
+        assert manager.context_window_size == 50000
+
     def test_build_messages_simple(self):
         """Test building messages with simple inputs."""
         manager = ContextWindowManager()
@@ -313,6 +395,30 @@ class TestContextBuilderWithBudget:
         assert len(messages) >= 2
         assert "total_tokens" in report
         assert "components" in report
+        assert "context_window" in report
+
+    def test_build_with_budget_gpt4_detection(self):
+        """Test that GPT-4 Turbo context window is detected."""
+        messages, report = ContextBuilder.build_with_budget(
+            system_prompt="Helper",
+            query="Question",
+            provider="openai",
+            model_id="gpt-4-turbo",
+        )
+        assert report["context_window"] == 128000
+        assert report["detected_provider"] == "openai"
+        assert report["detected_model"] == "gpt-4-turbo"
+
+    def test_build_with_budget_claude_detection(self):
+        """Test that Claude context window is detected."""
+        messages, report = ContextBuilder.build_with_budget(
+            system_prompt="Helper",
+            query="Question",
+            provider="anthropic",
+            model_id="claude-3-opus-20250219",
+        )
+        assert report["context_window"] == 200000
+        assert report["detected_provider"] == "anthropic"
 
     def test_build_with_budget_vs_simple(self):
         """Test that budget builder returns report."""
@@ -331,6 +437,7 @@ class TestContextBuilderWithBudget:
         # Budget version includes report
         assert isinstance(report, dict)
         assert "total_tokens" in report
+        assert "context_window" in report
 
 
 class TestIntegration:

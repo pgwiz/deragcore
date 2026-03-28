@@ -108,7 +108,9 @@ class ContextBuilder:
         query: str,
         retrieved_chunks: Optional[List[RetrievedChunk]] = None,
         history: Optional[List[ChatTurn]] = None,
-        context_window_size: int = 200000,
+        provider: Optional[str] = None,
+        model_id: Optional[str] = None,
+        context_window_size: Optional[int] = None,
         output_buffer_percentage: float = 0.15,
         enable_compression: bool = True,
     ) -> Tuple[List[Dict[str, str]], Dict[str, Any]]:
@@ -116,7 +118,7 @@ class ContextBuilder:
         Build context window with token budget enforcement.
 
         Phase 5 addition: Uses ContextWindowManager for dynamic prioritization,
-        compression, and token counting.
+        compression, and token counting. Supports multiple AI providers and models.
 
         Respects budget constraints:
         - Keeps system prompt and query (required)
@@ -129,19 +131,26 @@ class ContextBuilder:
             query: Current user query
             retrieved_chunks: Retrieved context chunks (will be prioritized)
             history: Conversation history (will be prioritized, may compress)
-            context_window_size: Available context in tokens (default: 200000)
+            provider: AI provider ('anthropic', 'openai', 'azure', 'ollama')
+                      Used to auto-detect model context window
+            model_id: Model identifier ('gpt-4-turbo', 'claude-3-opus', etc)
+                      Used to auto-detect model context window
+            context_window_size: Override context window in tokens (optional)
+                                 If None, looked up from registry
             output_buffer_percentage: Fraction reserved for response (default: 0.15)
             enable_compression: Allow compressing old history turns (default: True)
 
         Returns:
             Tuple of (messages, report) where:
             - messages: List of messages ready for AIController
-            - report: Dict with token breakdown, decisions, warnings
+            - report: Dict with token breakdown, decisions, warnings, detected model window
         """
         # Local import to avoid circular dependency
         from ragcore.core.context_window_manager import ContextWindowManager
 
         manager = ContextWindowManager(
+            provider=provider,
+            model_id=model_id,
             context_window_size=context_window_size,
             output_buffer_percentage=output_buffer_percentage,
         )
@@ -154,9 +163,15 @@ class ContextBuilder:
             enable_compression=enable_compression,
         )
 
+        # Add detected model info to report for transparency
+        report["detected_provider"] = manager.provider
+        report["detected_model"] = manager.model_id
+        report["context_window"] = manager.context_window_size
+
         logger.debug(
             f"Built budget context: {len(messages)} messages, "
-            f"{report['total_tokens']}/{report['available_tokens']} tokens"
+            f"{report['total_tokens']}/{report['available_tokens']} tokens "
+            f"(provider={manager.provider}, model={manager.model_id})"
         )
 
         return messages, report
