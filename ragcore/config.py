@@ -137,6 +137,52 @@ class Settings(BaseSettings):
     chroma_embedding_cache_size: int = 1000
     chroma_max_batch_size: int = 100
 
+    # ========== PHASE 5: Multi-Modal Support ==========
+    # Multi-Modal Processing
+    multimodal_enabled: bool = True
+    multimodal_max_image_size_mb: int = 20
+    multimodal_max_audio_size_mb: int = 1000
+    multimodal_max_video_size_mb: int = 5000
+    multimodal_max_inline_file_size_kb: int = 100
+
+    # Vision Processing
+    vision_provider: str = "claude"  # claude, azure, multimodal
+    vision_model: str = "claude-3-5-sonnet-20241022"
+    vision_enable_azure_fallback: bool = True
+    azure_vision_api_key: Optional[str] = None
+    azure_vision_endpoint: Optional[str] = None
+
+    # Audio Processing
+    audio_provider: str = "azure"  # azure, whisper, multimodal
+    audio_transcription_language: str = "en-US"
+    audio_enable_whisper_fallback: bool = True
+    openai_whisper_api_key: Optional[str] = None
+
+    # Video Processing
+    video_max_frame_extraction: int = 30  # Adaptive sampling limit
+    video_frame_extraction_strategy: str = "adaptive"  # adaptive, uniform, keyframe
+    video_extract_narration: bool = True
+    video_extract_frames: bool = True
+
+    # Multi-Modal Storage
+    multimodal_storage_backend: str = "local"  # local, s3, azure_blob
+    multimodal_storage_path: str = "/data/multimodal"
+    multimodal_s3_bucket: Optional[str] = None
+    multimodal_s3_region: Optional[str] = None
+    multimodal_azure_container: Optional[str] = None
+    multimodal_azure_account_name: Optional[str] = None
+
+    # Multi-Modal Embedding
+    multimodal_embedding_dimension: int = 1536  # Unified embedding space
+    multimodal_embedding_model: str = "text-embedding-3-large"
+    multimodal_enable_cross_modal_search: bool = True
+
+    # Performance & Limits
+    multimodal_processing_timeout_seconds: int = 300
+    multimodal_batch_size: int = 5
+    multimodal_cache_extracted_content: bool = True
+    multimodal_token_budget_per_content: int = 2000  # Max tokens per item
+
     class Config:
         env_file = ".env"
         case_sensitive = False

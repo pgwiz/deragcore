@@ -19,6 +19,8 @@ from ragcore.models import ModelConfig, Session
 from ragcore.modules.files import router as files_router
 from ragcore.modules.chat import router as chat_router
 from ragcore.modules.research import router as research_router
+from ragcore.modules.agents.router import router as agents_router
+from ragcore.modules.memory.router import router as memory_router
 from ragcore.auth import router as auth_router
 from ragcore.webhooks import router as webhooks_router
 from ragcore.monitoring import health_check
@@ -326,6 +328,13 @@ def create_app() -> FastAPI:
     app.include_router(files_router.router)
     app.include_router(chat_router.router)
     app.include_router(research_router.router)
+
+    # ======================================================================
+    # Mount Phase 5 Routers (Advanced Agent Features)
+    # ======================================================================
+
+    app.include_router(agents_router)
+    app.include_router(memory_router)
 
     # ======================================================================
     # Mount Phase 4 Routers (Production Hardening)
