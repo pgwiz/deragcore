@@ -1,7 +1,9 @@
 """Embedding provider adapter - abstracts embedding generation across providers."""
 
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 import logging
+import aiohttp
+import json
 
 from ragcore.core.model_provider_registry import ProviderType, ModelCapability
 from ragcore.modules.multimodal.providers.base_adapter import BaseProviderAdapter
@@ -14,9 +16,10 @@ class EmbeddingProviderAdapter(BaseProviderAdapter):
 
     Supports:
     - OpenAI text-embedding-3-large (primary) - 1536 dimensions
-    - Anthropic embeddings (via Claude with extraction)
     - Azure OpenAI embeddings
-    - Google Vertex AI PaLM embeddings
+    - Azure Foundry embeddings (serverless)
+    - Google Vertex AI embeddings
+    - Anthropic (falls back to OpenAI)
     """
 
     def __init__(
@@ -111,22 +114,47 @@ class EmbeddingProviderAdapter(BaseProviderAdapter):
         Returns:
             List of embeddings (1536-dim)
         """
-        # TODO: Implement OpenAI Embeddings API call
-        # 1. Get OpenAI provider config
-        # 2. Batch texts if needed (max 2048 tokens per request)
-        # 3. Call /v1/embeddings with model="text-embedding-3-large"
-        # 4. Extract embedding vectors from response
-        # 5. Validate dimension (should be 1536)
+        config = self.get_provider_config(ProviderType.OPENAI)
+        if not config or not config.api_key:
+            logger.error("OpenAI API key not configured")
+            return None
 
-        logger.debug(f"OpenAI: embedding {len(texts)} texts")
+        url = "https://api.openai.com/v1/embeddings"
+        headers = {
+            "Authorization": f"Bearer {config.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "input": texts,
+            "model": self.model_id or "text-embedding-3-large",
+        }
 
-        # Placeholder: return deterministic embeddings for testing
-        embeddings = []
-        for text in texts:
-            seed_value = len(text) % 100
-            embedding = [0.1 * (seed_value % 10) / 10.0 + 0.001 * i for i in range(self.embedding_dimension)]
-            embeddings.append(embedding)
-        return embeddings
+        try:
+            logger.debug(f"OpenAI: embedding {len(texts)} texts with model {self.model_id}")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"OpenAI API error {response.status}: {error_text}")
+                        return None
+
+                    data = await response.json()
+                    embeddings = [item["embedding"] for item in data.get("data", [])]
+
+                    # Validate dimensions
+                    for emb in embeddings:
+                        if len(emb) != self.embedding_dimension:
+                            logger.warning(f"OpenAI returned {len(emb)}-dim embedding, expected {self.embedding_dimension}")
+                            return None
+
+                    return embeddings
+
+        except aiohttp.ClientError as e:
+            logger.error(f"OpenAI HTTP error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"OpenAI embedding failed: {e}")
+            return None
 
     async def _embed_with_azure_openai(self, texts: List[str]) -> Optional[List[List[float]]]:
         """Call Azure OpenAI embedding API.
@@ -137,17 +165,52 @@ class EmbeddingProviderAdapter(BaseProviderAdapter):
         Returns:
             List of embeddings (1536-dim)
         """
-        # TODO: Implement Azure OpenAI Embeddings API call
-        # 1. Get Azure OpenAI provider config
-        # 2. Call /openai/deployments/{deployment}/embeddings
-        # 3. Extract embeddings from response
+        config = self.get_provider_config(ProviderType.AZURE_OPENAI)
+        if not config or not config.api_key or not config.endpoint:
+            logger.error("Azure OpenAI credentials not configured")
+            return None
 
-        logger.debug(f"Azure OpenAI: embedding {len(texts)} texts")
-        embeddings = []
-        for text in texts:
-            embedding = [0.2 + 0.001 * i for i in range(self.embedding_dimension)]
-            embeddings.append(embedding)
-        return embeddings
+        # Extract deployment name from config or use default
+        deployment_name = getattr(config, "deployment_name", "text-embedding-3-large")
+
+        # Construct endpoint: https://{resource}.openai.azure.com/openai/deployments/{deployment-id}/embeddings
+        url = f"{config.endpoint}/openai/deployments/{deployment_name}/embeddings?api-version=2024-02-15-preview"
+
+        headers = {
+            "api-key": config.api_key,
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "input": texts,
+            "model": self.model_id or "text-embedding-3-large",
+        }
+
+        try:
+            logger.debug(f"Azure OpenAI: embedding {len(texts)} texts with deployment {deployment_name}")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Azure OpenAI API error {response.status}: {error_text}")
+                        return None
+
+                    data = await response.json()
+                    embeddings = [item["embedding"] for item in data.get("data", [])]
+
+                    # Validate dimensions
+                    for emb in embeddings:
+                        if len(emb) != self.embedding_dimension:
+                            logger.warning(f"Azure OpenAI returned {len(emb)}-dim embedding, expected {self.embedding_dimension}")
+                            return None
+
+                    return embeddings
+
+        except aiohttp.ClientError as e:
+            logger.error(f"Azure OpenAI HTTP error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Azure OpenAI embedding failed: {e}")
+            return None
 
     async def _embed_with_azure_foundry(
         self, texts: List[str]
@@ -160,17 +223,49 @@ class EmbeddingProviderAdapter(BaseProviderAdapter):
         Returns:
             List of embeddings (1536-dim)
         """
-        # TODO: Implement Azure Foundry Embeddings API call
-        # 1. Get Azure Foundry provider config
-        # 2. Call serverless endpoint: /serverless/v1/embeddings/completions
-        # 3. Extract embeddings from response
+        config = self.get_provider_config(ProviderType.AZURE_FOUNDRY)
+        if not config or not config.api_key or not config.endpoint:
+            logger.error("Azure Foundry credentials not configured")
+            return None
 
-        logger.debug(f"Azure Foundry: embedding {len(texts)} texts")
-        embeddings = []
-        for text in texts:
-            embedding = [0.3 + 0.001 * i for i in range(self.embedding_dimension)]
-            embeddings.append(embedding)
-        return embeddings
+        # Construct serverless endpoint: https://{project}.{region}.models.ai.azure.com/serverless/v1/embeddings/completions
+        url = f"{config.endpoint}/serverless/v1/embeddings/completions"
+
+        headers = {
+            "Authorization": f"Bearer {config.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "input": texts,
+            "model": self.model_id or "text-embedding-3-large",
+        }
+
+        try:
+            logger.debug(f"Azure Foundry: embedding {len(texts)} texts")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Azure Foundry API error {response.status}: {error_text}")
+                        return None
+
+                    data = await response.json()
+                    embeddings = [item["embedding"] for item in data.get("data", [])]
+
+                    # Validate dimensions
+                    for emb in embeddings:
+                        if len(emb) != self.embedding_dimension:
+                            logger.warning(f"Azure Foundry returned {len(emb)}-dim embedding, expected {self.embedding_dimension}")
+                            return None
+
+                    return embeddings
+
+        except aiohttp.ClientError as e:
+            logger.error(f"Azure Foundry HTTP error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Azure Foundry embedding failed: {e}")
+            return None
 
     async def _embed_with_vertex(self, texts: List[str]) -> Optional[List[List[float]]]:
         """Call Google Vertex AI embedding API.
@@ -179,42 +274,97 @@ class EmbeddingProviderAdapter(BaseProviderAdapter):
             texts: List of texts to embed
 
         Returns:
-            List of embeddings (1536-dim, or provider's native dimension)
+            List of embeddings (1536-dim, resized if needed)
         """
-        # TODO: Implement Vertex AI Embeddings API call
-        # 1. Get Vertex AI provider config
-        # 2. Call /v1/projects/{project}/locations/{region}/publishers/google/models/embedding-001:predict
-        # 3. Extract embeddings, potentially resize to 1536-dim if needed
+        config = self.get_provider_config(ProviderType.VERTEX_AI)
+        if not config or not config.api_key or not config.endpoint:
+            logger.error("Vertex AI credentials not configured")
+            return None
 
-        logger.debug(f"Vertex AI: embedding {len(texts)} texts")
-        embeddings = []
-        for text in texts:
-            embedding = [0.4 + 0.001 * i for i in range(self.embedding_dimension)]
-            embeddings.append(embedding)
-        return embeddings
+        # Extract project and region from endpoint or config
+        # Expected format: https://{region}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/textembedding-gecko@latest:predict
+        project_id = getattr(config, "project_id", None)
+        region = getattr(config, "region", "us-central1")
+
+        if not project_id:
+            logger.error("Vertex AI project_id not configured")
+            return None
+
+        url = f"https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/publishers/google/models/textembedding-gecko@latest:predict"
+
+        headers = {
+            "Authorization": f"Bearer {config.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "instances": [{"content": text} for text in texts],
+        }
+
+        try:
+            logger.debug(f"Vertex AI: embedding {len(texts)} texts")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"Vertex AI API error {response.status}: {error_text}")
+                        return None
+
+                    data = await response.json()
+                    embeddings = [pred["embeddings"]["values"] for pred in data.get("predictions", [])]
+
+                    # Validate and resize dimensions if needed
+                    # Vertex AI embeddings are typically 768-dim, resize to 1536
+                    resized_embeddings = []
+                    for emb in embeddings:
+                        if len(emb) != self.embedding_dimension:
+                            # Simple resize: duplicate values or truncate
+                            if len(emb) < self.embedding_dimension:
+                                # Pad by repeating values
+                                repeat_factor = self.embedding_dimension // len(emb) + 1
+                                emb = (emb * repeat_factor)[:self.embedding_dimension]
+                            else:
+                                # Truncate
+                                emb = emb[:self.embedding_dimension]
+                            logger.debug(f"Vertex AI embedding resized to {self.embedding_dimension} dimensions")
+                        resized_embeddings.append(emb)
+
+                    return resized_embeddings
+
+        except aiohttp.ClientError as e:
+            logger.error(f"Vertex AI HTTP error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Vertex AI embedding failed: {e}")
+            return None
 
     async def _embed_with_anthropic(self, texts: List[str]) -> Optional[List[List[float]]]:
-        """Use Claude for embeddings (non-standard, extraction-based).
+        """Use Anthropic provider (fallback to OpenAI).
 
-        Note: Anthropic's Claude doesn't have native embeddings API.
-        This extracts semantic information from Claude's responses.
+        Note: Anthropic's Claude doesn't have a native embeddings API.
+        This method falls back to OpenAI embeddings as recommended by Anthropic.
 
         Args:
             texts: List of texts to embed
 
         Returns:
-            List of embeddings (1536-dim approximation)
+            List of embeddings (1536-dim)
         """
-        # TODO: Implement Anthropic embedding via Claude analysis
-        # Note: This is non-standard; Anthropic recommends using OpenAI embeddings
-        # Placeholder for now
+        logger.debug(f"Anthropic: no native embeddings API, falling back to OpenAI")
 
-        logger.debug(f"Anthropic (via Claude): embedding {len(texts)} texts (non-native)")
-        embeddings = []
-        for text in texts:
-            embedding = [0.5 + 0.001 * i for i in range(self.embedding_dimension)]
-            embeddings.append(embedding)
-        return embeddings
+        # Check if OpenAI is available
+        openai_config = self.get_provider_config(ProviderType.OPENAI)
+        if openai_config and openai_config.api_key:
+            logger.info("Using OpenAI embeddings as fallback for Anthropic request")
+            return await self._embed_with_openai(texts)
+
+        # If OpenAI not available, try Azure OpenAI
+        azure_config = self.get_provider_config(ProviderType.AZURE_OPENAI)
+        if azure_config and azure_config.api_key:
+            logger.info("Using Azure OpenAI embeddings as fallback for Anthropic request")
+            return await self._embed_with_azure_openai(texts)
+
+        logger.error("Anthropic embeddings requested but no embedding fallback provider configured")
+        return None
 
     async def execute(self, texts: List[str]) -> Any:
         """Execute embedding (implements BaseProviderAdapter interface).

@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
 from uuid import uuid4
+from aioresponses import aioresponses
 
 from ragcore.core.model_provider_registry import (
     ModelProviderRegistry,
@@ -280,11 +281,20 @@ class TestEmbeddingProviderAdapter:
         adapter = EmbeddingProviderAdapter(registry=registry)
 
         text = "This is a test sentence."
-        embedding = await adapter.embed_text(text)
 
-        assert embedding is not None
-        assert len(embedding) == 1536
-        assert all(isinstance(x, float) for x in embedding)
+        # Mock OpenAI API response
+        with aioresponses() as m:
+            mock_embedding = [0.1 * i / 1536 for i in range(1536)]
+            m.post(
+                "https://api.openai.com/v1/embeddings",
+                payload={"data": [{"embedding": mock_embedding}]}
+            )
+
+            embedding = await adapter.embed_text(text)
+
+            assert embedding is not None
+            assert len(embedding) == 1536
+            assert all(isinstance(x, float) for x in embedding)
 
     @pytest.mark.asyncio
     async def test_embed_multiple_texts(self):
@@ -305,11 +315,24 @@ class TestEmbeddingProviderAdapter:
             "This is the second text.",
             "This is the third text.",
         ]
-        embeddings = await adapter.embed_texts(texts)
 
-        assert embeddings is not None
-        assert len(embeddings) == 3
-        assert all(len(e) == 1536 for e in embeddings)
+        # Mock OpenAI API response
+        with aioresponses() as m:
+            mock_embeddings = [
+                [0.1 * i / 1536 for i in range(1536)],
+                [0.2 * i / 1536 for i in range(1536)],
+                [0.3 * i / 1536 for i in range(1536)],
+            ]
+            m.post(
+                "https://api.openai.com/v1/embeddings",
+                payload={"data": [{"embedding": emb} for emb in mock_embeddings]}
+            )
+
+            embeddings = await adapter.embed_texts(texts)
+
+            assert embeddings is not None
+            assert len(embeddings) == 3
+            assert all(len(e) == 1536 for e in embeddings)
 
     @pytest.mark.asyncio
     async def test_embed_empty_list(self):
