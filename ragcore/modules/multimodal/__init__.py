@@ -10,6 +10,12 @@ from ragcore.modules.multimodal.models import (
 from ragcore.modules.multimodal.processors.image_processor import ImageProcessor
 from ragcore.modules.multimodal.processors.audio_processor import AudioProcessor
 from ragcore.modules.multimodal.processors.video_processor import VideoProcessor
+from ragcore.modules.multimodal.embedding_pipeline import MultiModalEmbeddingPipeline
+from ragcore.modules.multimodal.context_manager import (
+    ContextWindowManagerForMultiModal,
+    ModalityWeights,
+    MultiModalContextReport,
+)
 
 __all__ = [
     "ModuleType",
@@ -20,4 +26,8 @@ __all__ = [
     "ImageProcessor",
     "AudioProcessor",
     "VideoProcessor",
+    "MultiModalEmbeddingPipeline",
+    "ContextWindowManagerForMultiModal",
+    "ModalityWeights",
+    "MultiModalContextReport",
 ]
