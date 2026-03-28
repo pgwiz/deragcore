@@ -1,7 +1,7 @@
 """Context building - Assemble final messages for AI completion."""
 
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 from ragcore.modules.chat.history import ChatTurn
 from ragcore.modules.chat.retriever import RetrievedChunk
@@ -103,7 +103,63 @@ class ContextBuilder:
         return messages
 
     @staticmethod
-    def estimate_tokens(messages: List[Dict[str, str]]) -> int:
+    def build_with_budget(
+        system_prompt: str,
+        query: str,
+        retrieved_chunks: Optional[List[RetrievedChunk]] = None,
+        history: Optional[List[ChatTurn]] = None,
+        context_window_size: int = 200000,
+        output_buffer_percentage: float = 0.15,
+        enable_compression: bool = True,
+    ) -> Tuple[List[Dict[str, str]], Dict[str, Any]]:
+        """
+        Build context window with token budget enforcement.
+
+        Phase 5 addition: Uses ContextWindowManager for dynamic prioritization,
+        compression, and token counting.
+
+        Respects budget constraints:
+        - Keeps system prompt and query (required)
+        - Prioritizes recent/relevant chunks and history
+        - Applies extractive compression to old history if under pressure
+        - Returns detailed report on decisions
+
+        Args:
+            system_prompt: System instruction/persona
+            query: Current user query
+            retrieved_chunks: Retrieved context chunks (will be prioritized)
+            history: Conversation history (will be prioritized, may compress)
+            context_window_size: Available context in tokens (default: 200000)
+            output_buffer_percentage: Fraction reserved for response (default: 0.15)
+            enable_compression: Allow compressing old history turns (default: True)
+
+        Returns:
+            Tuple of (messages, report) where:
+            - messages: List of messages ready for AIController
+            - report: Dict with token breakdown, decisions, warnings
+        """
+        # Local import to avoid circular dependency
+        from ragcore.core.context_window_manager import ContextWindowManager
+
+        manager = ContextWindowManager(
+            context_window_size=context_window_size,
+            output_buffer_percentage=output_buffer_percentage,
+        )
+
+        messages, report = manager.build_messages(
+            system_prompt=system_prompt,
+            query=query,
+            retrieved_chunks=retrieved_chunks or [],
+            history=history or [],
+            enable_compression=enable_compression,
+        )
+
+        logger.debug(
+            f"Built budget context: {len(messages)} messages, "
+            f"{report['total_tokens']}/{report['available_tokens']} tokens"
+        )
+
+        return messages, report
         """
         Rough estimate of total tokens in messages.
 
