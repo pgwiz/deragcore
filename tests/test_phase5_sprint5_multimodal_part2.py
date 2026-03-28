@@ -24,6 +24,41 @@ from ragcore.modules.multimodal.context_manager import (
     ContextWindowManagerForMultiModal,
     ModalityWeights,
 )
+from ragcore.modules.multimodal.providers.embedding_adapter import EmbeddingProviderAdapter
+from ragcore.core.model_provider_registry import (
+    ModelProviderRegistry,
+    ProviderConfig,
+    ProviderType,
+)
+
+
+# Fixture: Configure test embedding adapter with mock provider
+@pytest.fixture
+def test_embedding_adapter():
+    """Create embedding adapter with mock provider for testing."""
+    registry = ModelProviderRegistry()
+    # Register test provider with minimal config
+    config = ProviderConfig(
+        provider=ProviderType.OPENAI,
+        endpoint="https://api.openai.com",
+        api_key="test-key",
+    )
+    registry.register_provider(config)
+    adapter = EmbeddingProviderAdapter(registry=registry)
+    return adapter
+
+
+# Fixture: Configure test pipeline with mock adapter
+@pytest.fixture
+def test_embedding_pipeline(test_embedding_adapter):
+    """Create embedding pipeline with test adapter."""
+    pipeline = MultiModalEmbeddingPipeline(
+        embedding_adapter=test_embedding_adapter,
+        embedding_dimension=1536,
+        batch_size=10,
+        cache_enabled=True,
+    )
+    return pipeline
 
 
 # ============================================================================
@@ -64,9 +99,9 @@ class TestMultiModalEmbeddingPipeline:
         assert pipeline.validate_embedding_dimension(None) is False
 
     @pytest.mark.asyncio
-    async def test_embed_chunk_with_content(self):
+    async def test_embed_chunk_with_content(self, test_embedding_pipeline):
         """Test embedding single chunk with content."""
-        pipeline = MultiModalEmbeddingPipeline()
+        pipeline = test_embedding_pipeline
         chunk = MultiModalChunk(
             id=uuid4(),
             session_id=uuid4(),
@@ -93,9 +128,9 @@ class TestMultiModalEmbeddingPipeline:
         assert result.embedding == []  # Unchanged
 
     @pytest.mark.asyncio
-    async def test_embed_chunks_batch(self):
+    async def test_embed_chunks_batch(self, test_embedding_pipeline):
         """Test batch embedding."""
-        pipeline = MultiModalEmbeddingPipeline(batch_size=5)
+        pipeline = test_embedding_pipeline
         chunks = [
             MultiModalChunk(
                 id=uuid4(),
@@ -127,9 +162,9 @@ class TestMultiModalEmbeddingPipeline:
         assert len(pipeline.embedding_cache) == 0
 
     @pytest.mark.asyncio
-    async def test_embed_processing_result_with_chunks(self):
+    async def test_embed_processing_result_with_chunks(self, test_embedding_pipeline):
         """Test embedding all chunks in processing result."""
-        pipeline = MultiModalEmbeddingPipeline()
+        pipeline = test_embedding_pipeline
         chunks = [
             MultiModalChunk(
                 id=uuid4(),
@@ -324,7 +359,7 @@ class TestMultiModalIntegration:
     """End-to-end multi-modal workflow tests."""
 
     @pytest.mark.asyncio
-    async def test_workflow_embed_then_select(self):
+    async def test_workflow_embed_then_select(self, test_embedding_pipeline):
         """Test full workflow: embed chunks then select under budget."""
         # 1. Create chunks with mixed modalities
         chunks = [
@@ -352,7 +387,7 @@ class TestMultiModalIntegration:
         ]
 
         # 2. Embed chunks
-        pipeline = MultiModalEmbeddingPipeline()
+        pipeline = test_embedding_pipeline
         embedded_chunks = await pipeline.embed_chunks_batch(chunks)
 
         # Verify embeddings
@@ -426,9 +461,9 @@ class TestMultiModalIntegration:
             assert selected[0].confidence_score >= 0.9
 
     @pytest.mark.asyncio
-    async def test_workflow_caching(self):
+    async def test_workflow_caching(self, test_embedding_pipeline):
         """Test that embedding cache improves performance."""
-        pipeline = MultiModalEmbeddingPipeline(cache_enabled=True)
+        pipeline = test_embedding_pipeline
 
         # Create two chunks with same content
         session_id = uuid4()

@@ -10,6 +10,7 @@ from ragcore.modules.multimodal.models import (
     ModuleType,
     ProcessingResult,
 )
+from ragcore.modules.multimodal.providers.embedding_adapter import EmbeddingProviderAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -28,15 +29,17 @@ class MultiModalEmbeddingPipeline:
         embedding_dimension: int = 1536,
         batch_size: int = 10,
         cache_enabled: bool = True,
+        embedding_adapter: Optional[EmbeddingProviderAdapter] = None,
     ):
         """Initialize embedding pipeline.
 
         Args:
-            embedding_client: OpenAI/Azure embedding client
+            embedding_client: Deprecated - use embedding_adapter instead
             embedding_model: Model name (default: text-embedding-3-large)
             embedding_dimension: Output dimension (default: 1536)
             batch_size: Batch processing size
             cache_enabled: Cache embeddings for identical text
+            embedding_adapter: EmbeddingProviderAdapter for provider selection (optional)
         """
         self.embedding_client = embedding_client
         self.embedding_model = embedding_model
@@ -44,6 +47,20 @@ class MultiModalEmbeddingPipeline:
         self.batch_size = batch_size
         self.cache_enabled = cache_enabled
         self.embedding_cache: Dict[str, List[float]] = {}
+
+        # Use provided adapter or create default
+        if embedding_adapter:
+            self.adapter = embedding_adapter
+        else:
+            self.adapter = EmbeddingProviderAdapter(
+                embedding_dimension=embedding_dimension,
+                model_id=embedding_model,
+            )
+
+        logger.info(
+            f"Embedding pipeline initialized: provider={self.adapter.primary_provider.value if self.adapter.primary_provider else 'auto'}, "
+            f"dimension={embedding_dimension}, batch_size={batch_size}"
+        )
 
     async def embed_chunk(self, chunk: MultiModalChunk) -> MultiModalChunk:
         """Generate embedding for single chunk.
@@ -152,9 +169,7 @@ class MultiModalEmbeddingPipeline:
         return result
 
     async def _get_embedding(self, text: str) -> Optional[List[float]]:
-        """Get embedding for single text.
-
-        Placeholder for actual embedding API call.
+        """Get embedding for single text using provider adapter.
 
         Args:
             text: Text to embed
@@ -163,18 +178,20 @@ class MultiModalEmbeddingPipeline:
             1536-dimensional embedding vector or None
         """
         try:
-            # Placeholder - in production would call OpenAI/Azure embedding API
-            # with model="text-embedding-3-large"
-            # Returns 1536-dim vector
-
-            # For now, return placeholder
-            if not text:
+            if not text or not text.strip():
                 return None
 
-            # Deterministic placeholder based on text length
-            # (for testability)
-            seed_value = len(text) % 100
-            embedding = [0.1 * (seed_value % 10) / 10.0 + 0.001 * i for i in range(self.embedding_dimension)]
+            # Use provider adapter for actual embedding call
+            embedding = await self.adapter.embed_text(text)
+
+            if embedding and self.adapter.validate_embedding_dimension(embedding):
+                return embedding
+
+            if embedding:
+                logger.warning(
+                    f"Embedding dimension mismatch: got {len(embedding)}, expected {self.embedding_dimension}"
+                )
+
             return embedding
 
         except Exception as e:
@@ -182,9 +199,7 @@ class MultiModalEmbeddingPipeline:
             return None
 
     async def _get_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
-        """Get embeddings for batch of texts.
-
-        Placeholder for actual batch embedding API call.
+        """Get embeddings for batch of texts using provider adapter.
 
         Args:
             texts: List of texts to embed
@@ -192,13 +207,30 @@ class MultiModalEmbeddingPipeline:
         Returns:
             List of 1536-dimensional embeddings
         """
-        embeddings = []
-        for text in texts:
-            embedding = await self._get_embedding(text)
-            if embedding:
-                embeddings.append(embedding)
+        if not texts:
+            return []
 
-        return embeddings
+        try:
+            # Use provider adapter for batch embedding
+            embeddings = await self.adapter.embed_texts(texts)
+
+            if embeddings:
+                # Validate dimensions
+                valid_count = 0
+                for embedding in embeddings:
+                    if self.adapter.validate_embedding_dimension(embedding):
+                        valid_count += 1
+
+                if valid_count < len(embeddings):
+                    logger.warning(
+                        f"Dimension validation: {valid_count}/{len(embeddings)} embeddings valid"
+                    )
+
+            return embeddings or []
+
+        except Exception as e:
+            logger.error(f"Error in batch embedding: {e}")
+            return []
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get embedding cache statistics.
